@@ -24,14 +24,22 @@ Untuk rilis/Play Store: Build > Generate Signed Bundle / APK.
 3. Setelah selesai (hijau), buka run tersebut, lalu unduh "SchoolLMS-apk" di bagian Artifacts.
 4. Ekstrak zip-nya, instal app-debug.apk di HP.
 
-## Jendela AI khusus guru (build terpisah)
-APK biasa (untuk siswa) TIDAK memuat jendela AI. Jendela AI hanya ada di build guru, yang
-dipasang sebagai aplikasi terpisah (id ...man19jkt.guru) dan hanya aktif di situs sekolah sendiri.
+## Mode guru (jendela AI)
+- Skrip: app/src/main/assets/school-lms-ai.js. Sebelum build, isi `API_URL` (alamat Cloudflare Worker) dan `QUESTION_SELECTOR` (elemen soal di halaman).
+- Aktifkan: tekan lama ikon aplikasi > Mode guru > isi kode guru (sama dengan TEACHER_CODE di worker). Kosongkan lalu Simpan untuk mematikan.
+- Tanpa kode guru, skrip tidak pernah dijalankan. Worker juga menolak permintaan tanpa kode yang benar.
+- Di worker, ALLOWED_ORIGIN harus sama dengan alamat situs sekolah, contoh: https://man19jkt.assessment.web.id
 
-1. Deploy `cloudflare-worker/worker.js` di Cloudflare Workers. Isi Variables and Secrets:
-   ANTHROPIC_API_KEY (Secret), TEACHER_CODE (Secret), ALLOWED_ORIGIN (Text) = `https://*.assessment.web.id`
-2. Sesuaikan `QUESTION_SELECTOR` di `app/src/main/assets/school-lms-ai.js` dengan elemen soal di LMS.
-3. Build guru:
-   - GitHub: tab Actions > Build APK Guru > Run workflow > isi alamat worker > unduh "SchoolLMS-guru-apk".
-   - Android Studio / Gradle: `gradle assembleDebug -PteacherAi=true -PaiApiUrl=https://xxx.workers.dev`
-4. Pertama kali dipakai, jendela meminta kode guru (TEACHER_CODE). Bagikan APK guru hanya kepada guru.
+## Pasang semuanya lewat GitHub (APK + Worker)
+Isi repo ini: aplikasi Android (`app/`), Worker Cloudflare (`worker/`), dan dua workflow (`.github/workflows/`).
+
+1. Settings > Secrets and variables > Actions > **Secrets**, tambahkan:
+   - `CLOUDFLARE_API_TOKEN`  (dash.cloudflare.com > My Profile > API Tokens > template "Edit Cloudflare Workers")
+   - `CLOUDFLARE_ACCOUNT_ID` (Workers & Pages > kanan halaman)
+   - `ANTHROPIC_API_KEY`     (console.anthropic.com)
+   - `TEACHER_CODE`          (kode rahasia guru, bebas Anda tentukan)
+2. Cek `worker/wrangler.toml`: `ALLOWED_ORIGIN` harus sama dengan alamat situs sekolah.
+3. Tab Actions > **Deploy Worker** > Run workflow. Alamat Worker muncul di ringkasan run (Summary).
+4. Settings > Secrets and variables > Actions > **Variables** > New variable: `WORKER_URL` = alamat Worker tadi.
+5. Tab Actions > **Build APK** > Run workflow. Unduh **SchoolLMS-apk** di bagian Artifacts.
+6. Di HP: tekan lama ikon aplikasi > **Mode guru** > isi `TEACHER_CODE`.

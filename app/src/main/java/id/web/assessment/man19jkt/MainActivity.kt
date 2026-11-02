@@ -13,17 +13,15 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
-import android.webkit.JsPromptResult
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import android.widget.EditText
 import android.widget.ProgressBar
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.swiperefreshlayout.widget.SwipeRefreshLayout
+import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
 
@@ -31,10 +29,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var swipe: SwipeRefreshLayout
     private lateinit var progress: ProgressBar
     private var fileCallback: ValueCallback<Array<Uri>>? = null
-
-    private val teacherJs: String by lazy {
-        assets.open("school-lms-ai.js").bufferedReader().use { it.readText() }
-    }
 
     private lateinit var startUrl: String
     private lateinit var startHost: String
@@ -117,14 +111,7 @@ class MainActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView, url: String?) {
                 progress.visibility = View.GONE
                 swipe.isRefreshing = false
-                // Jendela AI hanya pada build khusus guru dan hanya di situs sekolah sendiri.
-                if (BuildConfig.TEACHER_AI && url != null && url.startsWith("https://") &&
-                    Uri.parse(url).host == startHost
-                ) {
-                    val cfg = "window.__SLMS_TEACHER__=true;window.__SLMS_API__=" +
-                        org.json.JSONObject.quote(BuildConfig.AI_API_URL) + ";"
-                    view.evaluateJavascript(cfg + teacherJs, null)
-                }
+                injectTeacher(view, url)
             }
 
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
@@ -137,22 +124,6 @@ class MainActivity : AppCompatActivity() {
         webView.webChromeClient = object : WebChromeClient() {
             override fun onProgressChanged(view: WebView, newProgress: Int) {
                 progress.progress = newProgress
-            }
-
-            // Kotak kode guru (prompt() bawaan tidak tampil di WebView tanpa ini).
-            override fun onJsPrompt(
-                view: WebView, url: String?, message: String?,
-                defaultValue: String?, result: JsPromptResult
-            ): Boolean {
-                val box = EditText(this@MainActivity).apply { setText(defaultValue ?: "") }
-                AlertDialog.Builder(this@MainActivity)
-                    .setMessage(message)
-                    .setView(box)
-                    .setPositiveButton(android.R.string.ok) { _, _ -> result.confirm(box.text.toString()) }
-                    .setNegativeButton(android.R.string.cancel) { _, _ -> result.cancel() }
-                    .setOnCancelListener { result.cancel() }
-                    .show()
-                return true
             }
 
             override fun onShowFileChooser(
@@ -200,6 +171,20 @@ class MainActivity : AppCompatActivity() {
         webView.onPause()
         CookieManager.getInstance().flush()
         super.onPause()
+    }
+
+    // Mode guru: hanya aktif jika kode guru sudah diisi lewat pintasan "Mode guru".
+    // Skrip dibaca dari assets dan dijalankan langsung (tidak memuat file dari luar).
+    private val teacherScript: String by lazy {
+        assets.open("school-lms-ai.js").bufferedReader().use { it.readText() }
+    }
+
+    private fun injectTeacher(view: WebView, url: String?) {
+        val code = SchoolCodeActivity.teacherCode(this) ?: return
+        if (url == null || Uri.parse(url).host != startHost) return
+        val pre = "window.__SLMS_GURU__=true;" +
+            "try{sessionStorage.setItem('slms_code'," + JSONObject.quote(code) + ");}catch(e){}\n"
+        view.evaluateJavascript(pre + teacherScript, null)
     }
 
     private fun isOnline(): Boolean {

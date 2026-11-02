@@ -10,17 +10,17 @@
 
   // ===== PENGATURAN: sesuaikan tiga baris pertama =====
   const CONFIG = {
-    API_URL: ""
-    // Elemen berisi soal. Boleh lebih dari satu, pisahkan dengan koma, contoh: "#soal, #pilihan"
+    API_URL: "",
+    // Kosongkan ("") agar seluruh halaman dibaca otomatis (teks + semua gambar), tanpa penanda.
+    // Atau isi penanda elemen soal jika ingin lebih tepat, contoh: "#soal, #pilihan"
     QUESTION_SELECTOR: "",
     AUTO_ANSWER: true,
     MAX_IMAGES: 20, // batas pengaman per soal (harus sama atau lebih kecil dari MAX_IMAGES di worker.js)
     TITLE: "School Lms",
-    // Aktif jika aplikasi build khusus guru (window.__SLMS_TEACHER__) atau alamat memuat ?guru.
-   iTeacher: () => true,
+    isStudent: () => true,
   };
-  if (!CONFIG.isTeacher()) return;
-  if (document.getElementById("slms")) return; // jangan ganda jika disuntikkan dua kali
+  if (!CONFIG.isStudent()) return;
+  if (document.getElementById("slms")) return; // sudah dipasang (aplikasi bisa menyuntik ulang)
 
   const css = `
 #slms{position:fixed;right:16px;bottom:16px;width:min(380px,calc(100vw - 32px));height:320px;min-width:240px;min-height:120px;max-width:calc(100vw - 8px);max-height:90vh;display:flex;flex-direction:column;overflow:hidden;resize:both;background:#16352b;color:#eef6f1;border:1px solid #e8c533;border-radius:10px;box-shadow:0 8px 28px rgba(0,0,0,.35);z-index:2147483000;font:14px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;box-sizing:border-box}
@@ -129,20 +129,35 @@
   }
 
   const hash = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return (h >>> 0).toString(36); };
+  // Mode seluruh halaman: jawab otomatis hanya jika halaman punya isian jawaban (pilihan ganda / esai).
+  const hasAnswerInputs = () =>
+    [...document.querySelectorAll("input[type=radio],input[type=checkbox],textarea")].some((e) => !root.contains(e));
   const big = (n) => { const r = n.getBoundingClientRect(); return r.width >= 8 && r.height >= 8; };
 
   // Baca teks dan SEMUA gambar pada elemen soal.
   function readQuestion() {
-    const els = document.querySelectorAll(CONFIG.QUESTION_SELECTOR);
-    if (!els.length) return null;
-    const text = [...els].map((e) => (e.innerText || "").trim()).filter(Boolean).join("\n").trim();
+    let els = [];
+    if (CONFIG.QUESTION_SELECTOR) { try { els = [...document.querySelectorAll(CONFIG.QUESTION_SELECTOR)]; } catch (e) {} }
+    const page = !els.length; // tanpa penanda: baca seluruh halaman
+    if (page) els = [document.body];
+    const okImg = (n) => {
+      if (root.contains(n) || !big(n)) return false;
+      if (!page) return true;
+      const r = n.getBoundingClientRect(); // di mode halaman, abaikan ikon/logo kecil dan header/menu/footer
+      return r.width >= 60 && r.height >= 40 && !n.closest("header,nav,footer");
+    };
+    const shown = root.style.display;
+    root.style.display = "none"; // jendela AI tidak ikut terbaca sebagai teks soal
+    let text = "";
+    try { text = els.map((e) => (e.innerText || "").trim()).filter(Boolean).join("\n").trim(); }
+    finally { root.style.display = shown; }
     const items = [], seen = new Set();
     const add = (it) => { if (!seen.has(it.key)) { seen.add(it.key); items.push(it); } };
     els.forEach((el) => {
       el.querySelectorAll("img,canvas,svg").forEach((n) => {
         const tag = n.localName;
         if (tag === "svg" && n.parentElement && n.parentElement.closest("svg")) return;
-        if (!big(n)) return;
+        if (!okImg(n)) return;
         if (tag === "img") {
           const src = n.currentSrc || n.src;
           if (src) add({ kind: "img", el: n, src, key: src });
@@ -154,16 +169,16 @@
       });
       el.querySelectorAll("*").forEach((n) => {
         const m = /url\(["']?([^"')]+)["']?\)/.exec(getComputedStyle(n).backgroundImage || "");
-        if (m && big(n)) add({ kind: "bg", el: null, src: m[1], key: m[1] });
+        if (m && okImg(n)) add({ kind: "bg", el: null, src: m[1], key: m[1] });
       });
     });
-    return { text, items, key: text + "|" + items.map((i) => i.key).join(",") };
+    return { text, items, page, key: text.replace(/\b\d{1,2}:\d{2}(:\d{2})?\b/g, "") + "|" + items.map((i) => i.key).join(",") };
   }
   const keyOf = (q) => q.key + "|" + manualImgs.map((m) => m.id).join(",");
 
   async function ask(force) {
     const q = readQuestion();
-    if (!q) { st("Elemen soal tidak ditemukan. Periksa QUESTION_SELECTOR di school-lms-ai.js."); return; }
+    if (!q) { st("Halaman tidak bisa dibaca."); return; }
     if (!q.text && !q.items.length && !manualImgs.length) { st("Soal kosong."); return; }
     const key = keyOf(q);
     if (!force && cache.has(key)) { show(cache.get(key)); return; }
@@ -212,8 +227,9 @@
 
   // Pantau pergantian soal dan jawab otomatis.
   function schedule() {
-    clearTimeout(timer);
+    if (timer) return; // dibatasi, bukan di-reset, supaya animasi/penghitung waktu tidak menahan pembacaan
     timer = setTimeout(() => {
+      timer = null;
       const q = readQuestion();
       if (!q) return;
       if (q.key !== lastBase) { lastBase = q.key; manualImgs = []; }
@@ -223,14 +239,12 @@
       if (ctl) ctl.abort();
       show(cache.get(k) || "");
       st(getCode() ? "" : "Tekan “Jawab sekarang” dan masukkan kode guru.");
-      if ($(".slms-auto").checked && getCode() && (q.text || q.items.length) && !cache.has(k)) ask(false);
-    }, 600);
+      if ($(".slms-auto").checked && getCode() && (q.text || q.items.length) && !cache.has(k) && (!q.page || hasAnswerInputs())) ask(false);
+    }, 800);
   }
   function watch() {
-    const els = document.querySelectorAll(CONFIG.QUESTION_SELECTOR);
-    if (!els.length) { setTimeout(watch, 1000); return; }
-    const mo = new MutationObserver(schedule);
-    els.forEach((el) => mo.observe(el, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["src", "srcset", "style"] }));
+    const mo = new MutationObserver((muts) => { if (muts.some((m) => !root.contains(m.target))) schedule(); });
+    mo.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: ["src", "srcset", "style"] });
     schedule();
   }
   watch();
